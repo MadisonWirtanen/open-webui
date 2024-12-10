@@ -1,23 +1,22 @@
 name: Upstream Sync
-
 permissions:
   contents: write
-
 on:
   schedule:
     - cron: "30 * * * *" # every hour
   workflow_dispatch:
+
 
 jobs:
   sync_latest_from_upstream:
     name: Sync latest commits from upstream repo
     runs-on: ubuntu-latest
     if: ${{ github.event.repository.fork }}
-
     steps:
       # Step 1: run a standard checkout action
       - name: Checkout target repo
         uses: actions/checkout@v3
+
 
       # Step 2: run the sync action
       - name: Sync upstream changes
@@ -27,14 +26,43 @@ jobs:
           upstream_sync_repo: open-webui/open-webui
           upstream_sync_branch: main
           target_sync_branch: main
-          target_repo_token: ${{ secrets.GITHUB_TOKEN }} # automatically generated, no need to set
-
-          # Set test_mode true to run tests instead of the true action!!
+          target_repo_token: ${{ secrets.GITHUB_TOKEN }}
           test_mode: false
 
+
+      # Step 3: Check if sync was successful and triggered new commits
+      - name: Check sync status
+        id: check_sync
+        run: |
+          # Get the number of new commits
+          new_commits=$(git rev-list HEAD...origin/main --count)
+          echo "New commits: $new_commits"
+          if [ "$new_commits" -gt 0 ]; then
+            echo "new_commits=true" >> $GITHUB_OUTPUT
+          else
+            echo "new_commits=false" >> $GITHUB_OUTPUT
+          fi
+
+
+      # Step 4: Trigger docker-build workflow if new commits exist
+      - name: Trigger Docker Build
+        if: steps.check_sync.outputs.new_commits == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'docker-build.yaml',
+              ref: 'main'
+            })
+
+
+      # Existing error handling step
       - name: Sync check
         if: failure()
         run: |
-          echo "[Error] 由于上游仓库的 workflow 文件变更，导致 GitHub 自动暂停了本次自动更新，你需要手动 Sync Fork 一次。
-          echo "[Error] Due to a change in the workflow file of the upstream repository, GitHub has automatically suspended the scheduled automatic update. You need to manually sync your fork.
+          echo "[Error] 由于上游仓库的 workflow 文件变更，导致 GitHub 自动暂停了本次自动更新，你需要手动 Sync Fork 一次。"
+          echo "[Error] Due to a change in the workflow file of the upstream repository, GitHub has automatically suspended the scheduled automatic update. You need to manually sync your fork."
           exit 1
